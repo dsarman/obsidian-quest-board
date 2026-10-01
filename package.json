@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-quest-board",
+  "version": "0.1.0",
+  "description": "Habitica-style quest board rendered from daily-note habits and TaskNotes. One SVG core for Obsidian and for server-side PNG export.",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "render": "node render.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^26.6.3",
+    "esbuild": "^0.28.2",
+    "js-yaml": "^5.4.2",
+    "obsidian": "^1.13.1",
+    "typescript": "^7.0.2"
+  }
+}

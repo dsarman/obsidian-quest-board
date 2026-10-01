@@ -1,0 +1,4 @@
+.quest-board { margin: 0.5em 0; }
+.quest-board svg { border-radius: 12px; display: block; }
+.quest-board .qb-card:hover rect:first-child { fill: #232838; }
+.quest-board .qb-link:hover { fill: #ebedf0; text-decoration: underline; }

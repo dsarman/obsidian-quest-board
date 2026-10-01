@@ -1,0 +1,9 @@
+{
+  "id": "quest-board",
+  "name": "Quest Board",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Habitica-style quest board from daily-note habits and TaskNotes. Live SVG in a ```quests``` block; same core renders the PNG on the server.",
+  "author": "David",
+  "isDesktopOnly": false
+}
