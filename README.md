@@ -8,7 +8,7 @@ Habitica-inspired quest board for Obsidian, computed from data you already have:
 
 One TypeScript core (`src/core.ts`) computes the stats and emits SVG. Two hosts use it:
 
-- **Obsidian plugin** (`src/main.ts`): a ```` ```quests ```` code block renders a live, clickable SVG and refreshes when the vault changes. Optional `month: YYYY-MM` inside the block.
+- **Obsidian plugin** (`src/main.ts`): a ```` ```quests ```` code block renders a live, clickable SVG and refreshes when the vault changes. The layout is drawn for the actual width of the note, so text keeps its size on phones (cards stack and wrap instead of shrinking).
 - **Headless renderer** (`render.mjs`): reads the vault read-only and writes `questboard.svg` + `questboard.png` (via `@resvg/resvg-js`, no browser) to `--out`, e.g. to send the board from a chat bot. It never writes into the vault.
 
 ## Install
@@ -16,6 +16,18 @@ One TypeScript core (`src/core.ts`) computes the stats and emits SVG. Two hosts 
 **BRAT:** install [BRAT](https://github.com/TfTHacker/obsidian42-brat), then *Add beta plugin* with this repository's URL and enable **Quest Board**.
 
 **Manual:** copy `main.js`, `manifest.json`, `styles.css` from the latest release into `<vault>/.obsidian/plugins/quest-board/`.
+
+## Block options
+
+````
+```quests
+view: month        # default; or: week
+month: 2026-09     # month view: show another month
+week: 2026-W41     # week view: show another ISO week
+```
+````
+
+`view: week` shows the current ISO week: per habit the Mon–Sun days and progress toward the weekly threshold, per project the tasks completed that week (by `completedDate`), and XP earned that week. In a weekly note named like `…/YYYY/MM/Weekly/W41.md` it shows that note's week automatically.
 
 ## Configuration
 
@@ -54,7 +66,7 @@ Daily notes are found as `*/Daily/YYYY-MM-DD.md` under the configured root; a li
 
 ```
 npm install && npm run build          # -> main.js, dist/core.js
-node render.mjs --vault PATH [--month YYYY-MM] [--out DIR]
+node render.mjs --vault PATH [--view month|week] [--month YYYY-MM] [--week YYYY-Www] [--width PX] [--out DIR]
 ```
 
 Releases are built by GitHub Actions when a tag matching the manifest version (e.g. `0.1.0`) is pushed.

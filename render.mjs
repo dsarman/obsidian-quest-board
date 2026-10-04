@@ -4,7 +4,8 @@
  * Reads the vault read-only and writes questboard.svg + questboard.png to --out (default: current dir).
  * Never writes into the vault.
  *
- * Usage: node render.mjs --vault PATH [--month YYYY-MM] [--out DIR]   (or QB_VAULT=PATH)
+ * Usage: node render.mjs --vault PATH [--view month|week] [--month YYYY-MM] [--week YYYY-Www]
+ *                        [--width PX] [--out DIR]   (or QB_VAULT=PATH)
  * Prints the PNG path on success.
  */
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
@@ -12,7 +13,7 @@ import { join, basename } from "node:path";
 import { createRequire } from "node:module";
 const yaml = createRequire(import.meta.url)("js-yaml");
 import { Resvg } from "@resvg/resvg-js";
-import { computeStats, renderSvg, normalizeProjects } from "./dist/core.js";
+import { computeStats, computeWeek, renderSvg, renderWeekSvg, normalizeProjects } from "./dist/core.js";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => {
   if (x.startsWith("--")) a.push([x.slice(2), arr[i + 1]]);
@@ -55,14 +56,17 @@ for (const dir of ["TaskNotes/Tasks", "TaskNotes/Archive"]) {
   }
 }
 const today = todayPrague();
-const stats = computeStats({ config, daily, tasks, today, month: args.month });
-const svg = renderSvg(stats, { interactive: false });
+const width = Number(args.width ?? 640);
+const input = { config, daily, tasks, today, month: args.month };
+const svg = args.view === "week"
+  ? renderWeekSvg(computeWeek(input, args.week), { width })
+  : renderSvg(computeStats(input), { width });
 
 mkdirSync(OUT, { recursive: true });
 writeFileSync(join(OUT, "questboard.svg"), svg);
 const png = new Resvg(svg, {
   font: { loadSystemFonts: true, defaultFontFamily: "DejaVu Sans" },
-  fitTo: { mode: "width", value: 1200 },
+  fitTo: { mode: "zoom", value: 2 }, // crisp on phones
 }).render().asPng();
 const pngPath = join(OUT, "questboard.png");
 writeFileSync(pngPath, png);
