@@ -9,7 +9,7 @@ Habitica-inspired quest board for Obsidian, computed from data you already have:
 One TypeScript core (`src/core.ts`) computes the stats and emits SVG. Two hosts use it:
 
 - **Obsidian plugin** (`src/main.ts`): a ```` ```quests ```` code block renders a live, clickable SVG and refreshes when the vault changes. Optional `month: YYYY-MM` inside the block.
-- **Headless renderer** (`render.mjs`): reads the vault from disk and writes `questboard.svg` + `questboard.png` (via `@resvg/resvg-js`, no browser), e.g. for a nightly cron or a chat bot.
+- **Headless renderer** (`render.mjs`): reads the vault read-only and writes `questboard.svg` + `questboard.png` (via `@resvg/resvg-js`, no browser) to `--out`, e.g. to send the board from a chat bot. It never writes into the vault.
 
 ## Install
 

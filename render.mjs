@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
  * Server-side Quest Board renderer: same core as the Obsidian plugin.
- * Reads the vault from disk, writes SVG + PNG, refreshes Quest Board.md.
+ * Reads the vault read-only and writes questboard.svg + questboard.png to --out (default: current dir).
+ * Never writes into the vault.
  *
  * Usage: node render.mjs --vault PATH [--month YYYY-MM] [--out DIR]   (or QB_VAULT=PATH)
  * Prints the PNG path on success.
  */
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, copyFileSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { createRequire } from "node:module";
 const yaml = createRequire(import.meta.url)("js-yaml");
@@ -19,8 +20,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => {
 }, []));
 const VAULT = args.vault ?? process.env.QB_VAULT;
 if (!VAULT) { console.error("Usage: node render.mjs --vault PATH (or set QB_VAULT)"); process.exit(2); }
-const OUT = args.out ?? join(VAULT, "Resources/Attachments/Quest Board");
-const NOTE = join(VAULT, "Quest Board.md");
+const OUT = args.out ?? process.cwd();
 
 function fm(path) {
   const t = readFileSync(path, "utf8");
@@ -66,22 +66,4 @@ const png = new Resvg(svg, {
 }).render().asPng();
 const pngPath = join(OUT, "questboard.png");
 writeFileSync(pngPath, png);
-copyFileSync(pngPath, join(OUT, `questboard-${stats.month}.png`));
-
-writeFileSync(NOTE, `---
-tags: [dashboard]
-updated: ${today}
----
-
-# Quest Board
-
-\`\`\`quests
-\`\`\`
-
-- Definice questů, cílů a „Proč“: [[Quests]]
-- Level ${stats.level} · ${stats.xp} XP (stav k ${today}). Blok nahoře je živý (plugin Quest Board); níže je noční snímek pro Telegram a pro zařízení bez pluginu.
-- Historie: \`Resources/Attachments/Quest Board/questboard-YYYY-MM.png\`
-
-![[Resources/Attachments/Quest Board/questboard.png]]
-`);
 console.log(pngPath);
