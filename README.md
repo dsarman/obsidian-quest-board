@@ -38,7 +38,7 @@ quests:
     why: "Calm, focused afternoons."
   - id: house
     type: project
-    project: Projects/House # tasks with projects: [[House]] count
+    project: House          # note name; tasks with projects: [[House]] count
     title: House
     icon: "⌂"
     color: "#FFB74D"
