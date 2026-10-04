@@ -3,7 +3,7 @@
  * Server-side Quest Board renderer: same core as the Obsidian plugin.
  * Reads the vault from disk, writes SVG + PNG, refreshes Quest Board.md.
  *
- * Usage: node render.mjs [--vault PATH] [--month YYYY-MM] [--out DIR]
+ * Usage: node render.mjs --vault PATH [--month YYYY-MM] [--out DIR]   (or QB_VAULT=PATH)
  * Prints the PNG path on success.
  */
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, copyFileSync, statSync } from "node:fs";
@@ -17,7 +17,8 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => {
   if (x.startsWith("--")) a.push([x.slice(2), arr[i + 1]]);
   return a;
 }, []));
-const VAULT = args.vault ?? "/opt/data/repos/Notes";
+const VAULT = args.vault ?? process.env.QB_VAULT;
+if (!VAULT) { console.error("Usage: node render.mjs --vault PATH (or set QB_VAULT)"); process.exit(2); }
 const OUT = args.out ?? join(VAULT, "Resources/Attachments/Quest Board");
 const NOTE = join(VAULT, "Quest Board.md");
 
@@ -37,7 +38,7 @@ function walk(dir, out = []) {
   return out;
 }
 function todayPrague() {
-  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Prague" }).format(new Date()); // YYYY-MM-DD
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: process.env.QB_TZ ?? "Europe/Prague" }).format(new Date()); // YYYY-MM-DD
 }
 
 const config = fm(join(VAULT, "Config/Quests.md"));

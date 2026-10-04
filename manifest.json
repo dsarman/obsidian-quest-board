@@ -3,7 +3,7 @@
   "name": "Quest Board",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Habitica-style quest board from daily-note habits and TaskNotes. Live SVG in a ```quests``` block; same core renders the PNG on the server.",
+  "description": "Habitica-style quest board from daily-note habits and TaskNotes: XP that only goes up, monthly goals, records and weekly streaks.",
   "author": "David",
   "isDesktopOnly": false
 }
