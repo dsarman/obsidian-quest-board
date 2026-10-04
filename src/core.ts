@@ -20,12 +20,30 @@ export interface QuestDef {
   why?: string;
   /** Note opened when the card is clicked (link text or vault path). Defaults: project note for projects, today's daily note for habits. */
   note?: string;
+  /** Words that identify this quest in plan lines and reflections (case-insensitive substrings). Default: title + habit key. */
+  words?: string[];
+  /** Time window "HH:MM-HH:MM" for the Now card when today's plan has no timed line for it. */
+  when?: string;
+  /** ISO weekdays (1 = Mon … 7 = Sun) on which `when` applies. Default: every day. */
+  days?: number[];
+  /** Short instruction shown on the Now card. */
+  how?: string;
+  /** Take the instruction from a note: the last list item labelled `label` (e.g. "Příště") and its sub-items. */
+  how_from?: { note: string; label?: string };
 }
 
 export interface QuestConfig {
   xp_per_habit?: number;
   xp_per_task?: number;
   xp_per_level?: number;
+  /** Bonus XP when a habit is done again after a pause. */
+  xp_per_comeback?: number;
+  /** Days without the habit that make the next one a comeback (default 3). */
+  comeback_gap?: number;
+  /** Now card: heading of the timed plan in daily notes (Day Planner format). */
+  plan_heading?: string;
+  /** Reflection headings (substring match) mined for quotes; empty/absent = quotes off. */
+  quote_headings?: string[];
   quests?: QuestDef[];
 }
 
@@ -41,6 +59,12 @@ export interface BoardInput {
   tasks: TaskData[];
   today: string; // YYYY-MM-DD
   month?: string; // YYYY-MM, defaults to today's month
+  /** Current local time "HH:MM" (enables the Now card). */
+  now?: string;
+  /** date -> full daily-note markdown (for plan + reflection quotes). */
+  bodies?: Record<string, string>;
+  /** vault path -> markdown of notes referenced by `how_from`. */
+  texts?: Record<string, string>;
 }
 
 export interface HabitStats {
@@ -53,6 +77,21 @@ export interface HabitStats {
   weekStreak: number;
   weekThis: number;
   weekThreshold: number;
+  comebacks: number;
+  /** "today" | "yesterday" when the latest session was a comeback. */
+  comebackRecent: "today" | "yesterday" | null;
+  quote?: Quote;
+}
+
+export interface Quote { date: string; text: string }
+
+export interface NowItem {
+  state: "now" | "next";
+  start: string;
+  end?: string;
+  label: string;
+  quest?: QuestDef;
+  how: string[];
 }
 
 export interface ProjectStats {
@@ -75,6 +114,7 @@ export interface BoardStats {
   into: number;
   perLevel: number;
   quests: QuestStats[];
+  now?: NowItem;
 }
 
 export const MONTHS_CS = [
@@ -156,6 +196,207 @@ export function weekStreak(
   return { streak, thisWeek };
 }
 
+
+// ---------- comebacks ----------
+
+/** Dates on which a habit was done after at least `gap` days without it. */
+export function comebackDays(daily: Record<string, Frontmatter>, key: string, upto: string, gap: number): string[] {
+  const out: string[] = [];
+  let prev: Date | null = null;
+  for (const dt of Object.keys(daily).sort()) {
+    if (dt > upto) break;
+    if (!habitDone(daily[dt], key)) continue;
+    const d = dateOf(dt);
+    if (prev && Math.round((d.getTime() - prev.getTime()) / 86400000) - 1 >= gap) out.push(dt);
+    prev = d;
+  }
+  return out;
+}
+
+// ---------- text helpers ----------
+
+export function cleanMd(s: string): string {
+  return s
+    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
+    .replace(/\[\[([^\]]+)\]\]/g, (_, t) => String(t).split("/").pop() as string)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function questWords(def: QuestDef): string[] {
+  const w = def.words?.length ? def.words : [def.title, def.habit ?? "", def.project ?? ""];
+  return w.map(x => String(x).toLowerCase().trim()).filter(x => x.length >= 3);
+}
+
+function matchesQuest(text: string, def: QuestDef): boolean {
+  const t = text.toLowerCase();
+  return questWords(def).some(w => t.includes(w));
+}
+
+function stripFrontmatter(md: string): string {
+  return md.startsWith("---") ? md.replace(/^---\n[\s\S]*?\n---\n?/, "") : md;
+}
+
+/** Bullet lines under headings whose text contains one of `headings`. */
+export function sectionLines(md: string, headings: string[]): string[] {
+  const hs = headings.map(h => h.toLowerCase());
+  const out: string[] = [];
+  let on = false;
+  for (const raw of stripFrontmatter(md).split("\n")) {
+    const h = raw.match(/^#{1,6}\s+(.*)$/);
+    if (h) { const t = h[1].toLowerCase(); on = hs.some(x => t.includes(x)); continue; }
+    if (!on) continue;
+    const l = cleanMd(raw.replace(/^\s*[-*+]\s+(\[.\]\s+)?/, ""));
+    if (l && l !== "-") out.push(l);
+  }
+  return out;
+}
+
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+/** A sentence from the user's own reflections that mentions the quest; rotates daily. */
+export function pickQuote(def: QuestDef, bodies: Record<string, string>, headings: string[], today: string): Quote | undefined {
+  const found: Quote[] = [];
+  for (const d of Object.keys(bodies).sort()) {
+    if (d > today) continue;
+    for (const l of sectionLines(bodies[d], headings)) if (matchesQuest(l, def)) found.push({ date: d, text: l });
+  }
+  if (!found.length) return undefined;
+  return found[hashStr(today + def.id) % found.length];
+}
+
+// ---------- Now card ----------
+
+export interface PlanItem { done: boolean; start: string; end?: string; text: string; links: string[] }
+
+function hhmm(s: string): string { const [h, m] = s.split(":"); return `${h.padStart(2, "0")}:${m}`; }
+function addMin(t: string, n: number): string {
+  const [h, m] = t.split(":").map(Number);
+  const v = Math.min(h * 60 + m + n, 24 * 60 - 1);
+  return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
+}
+
+/** Timed lines (Day Planner format) under `heading`. */
+export function parsePlan(md: string, heading: string): PlanItem[] {
+  const lines = stripFrontmatter(md).split("\n");
+  const items: PlanItem[] = [];
+  let level = 0;
+  for (const raw of lines) {
+    const h = raw.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      if (level && h[1].length <= level) break;
+      if (!level && h[2].trim().toLowerCase().includes(heading.toLowerCase())) level = h[1].length;
+      continue;
+    }
+    if (!level) continue;
+    const m = raw.match(/^\s*[-*+]\s+(?:\[( |x|X)\]\s+)?(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\s+(.*)$/);
+    if (!m) continue;
+    const links = Array.from(m[4].matchAll(/\[\[([^\]|#]+)/g)).map(x => x[1].split("/").pop() as string);
+    items.push({ done: (m[1] ?? " ").trim() !== "", start: hhmm(m[2]), end: m[3] ? hhmm(m[3]) : undefined, text: m[4], links });
+  }
+  return items;
+}
+
+/** Last list item labelled `label` in md, plus its nested sub-items. */
+export function extractHow(md: string, label: string): string[] {
+  const lines = stripFrontmatter(md).split("\n");
+  let idx = -1;
+  const lab = label.toLowerCase();
+  lines.forEach((l, i) => {
+    const t = l.replace(/\*\*/g, "").replace(/^\s*[-*+]\s+/, "").trim().toLowerCase();
+    if (/^\s*[-*+]\s+/.test(l) && t.startsWith(lab)) idx = i;
+  });
+  if (idx < 0) return [];
+  const base = (lines[idx].match(/^\s*/) as RegExpMatchArray)[0].length;
+  const out: string[] = [];
+  const inline = cleanMd(lines[idx].replace(/^\s*[-*+]\s+/, "").replace(/\*\*/g, "").slice(label.length).replace(/^\s*:\s*/, ""));
+  if (inline) out.push(inline);
+  for (let i = idx + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.trim()) break;
+    const ind = (l.match(/^\s*/) as RegExpMatchArray)[0].length;
+    if (ind <= base) break;
+    const t = cleanMd(l.replace(/^\s*[-*+]\s+/, ""));
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+function taskDoneToday(tasks: TaskData[], name: string, today: string): boolean | undefined {
+  const t = tasks.find(x => (x._path.split("/").pop() ?? "").replace(/\.md$/, "") === name);
+  if (!t) return undefined;
+  if (t.recurrence) {
+    const inst = Array.isArray(t.completeInstances) ? t.completeInstances : [];
+    return inst.some(d => dayOf(d) === today);
+  }
+  return t.status === "done";
+}
+
+function weekday(day: string): number { return dateOf(day).getUTCDay() || 7; }
+
+function howFor(def: QuestDef | undefined, texts: Record<string, string>): string[] {
+  if (!def) return [];
+  const out: string[] = [];
+  if (def.how_from) {
+    const key = Object.keys(texts).find(k => k === def.how_from!.note || k === `${def.how_from!.note}.md`);
+    if (key) out.push(...extractHow(texts[key], def.how_from.label ?? "Příště"));
+  }
+  if (def.how) out.push(def.how);
+  return out;
+}
+
+export function computeNow(input: BoardInput): NowItem | undefined {
+  const now = input.now;
+  if (!now) return undefined;
+  const cfg = input.config;
+  const quests = cfg.quests ?? [];
+  const today = input.today;
+  const fm = input.daily[today];
+  const texts = input.texts ?? {};
+  const doneQuest = (q?: QuestDef) => !!q && q.type === "habit" && !!q.habit && habitDone(fm, q.habit);
+
+  type Cand = { start: string; end: string; label: string; quest?: QuestDef };
+  const cands: Cand[] = [];
+  const body = input.bodies?.[today];
+  if (body) {
+    for (const it of parsePlan(body, cfg.plan_heading ?? "Day planner")) {
+      if (it.done) continue;
+      if (it.links.some(l => taskDoneToday(input.tasks, l, today) === true)) continue;
+      const quest = quests.find(q => matchesQuest(it.text, q) || it.links.some(l => matchesQuest(l, q)));
+      if (doneQuest(quest)) continue;
+      cands.push({ start: it.start, end: it.end ?? addMin(it.start, 30), label: cleanMd(it.text), quest });
+    }
+  }
+  // quests with a `when` window that today's plan doesn't already schedule
+  for (const q of quests) {
+    const w = q.when?.match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
+    if (!w || doneQuest(q)) continue;
+    if (q.days?.length && !q.days.includes(weekday(today))) continue;
+    if (cands.some(c => c.quest?.id === q.id)) continue;
+    cands.push({ start: hhmm(w[1]), end: hhmm(w[2]), label: q.title, quest: q });
+  }
+  cands.sort((a, b) => a.start.localeCompare(b.start));
+  const cur = cands.find(c => c.start <= now && now < c.end);
+  const pick = cur ?? cands.find(c => c.start > now);
+  if (!pick) return undefined;
+  return {
+    state: cur ? "now" : "next", start: pick.start, end: pick.end, label: pick.label,
+    quest: pick.quest, how: howFor(pick.quest, texts),
+  };
+}
+
+/** Notes the board reads besides daily notes and tasks (for hosts that load text). */
+export function referencedNotes(cfg: QuestConfig): string[] {
+  return (cfg.quests ?? []).map(q => q.how_from?.note).filter((x): x is string => !!x);
+}
+
 // ---------- stats ----------
 
 export function computeStats(input: BoardInput): BoardStats {
@@ -180,6 +421,9 @@ export function computeStats(input: BoardInput): BoardStats {
       xp += xpT;
     }
   }
+  const xpC = cfg.xp_per_comeback ?? 10;
+  const gap = cfg.comeback_gap ?? 3;
+  for (const k of habitKeys) xp += xpC * comebackDays(daily, k, today, gap).length;
   const level = Math.floor(xp / perLevel);
   const into = xp % perLevel;
 
@@ -192,9 +436,16 @@ export function computeStats(input: BoardInput): BoardStats {
       const last14 = dates.filter(d => d <= today).slice(-14).map(d => habitDone(daily[d], k));
       const thr = def.weekly ?? 4;
       const ws = weekStreak(daily, k, thr, today);
+      const cbs = comebackDays(daily, k, today, gap);
+      const lastDone = [...dates].reverse().find(d => d <= today && habitDone(daily[d], k));
+      const yesterday = ymd(addDays(dateOf(today), -1));
+      const lastCb = cbs[cbs.length - 1];
+      const comebackRecent = lastCb && lastCb === lastDone ? (lastCb === today ? "today" : lastCb === yesterday ? "yesterday" : null) : null;
+      const quote = cfg.quote_headings?.length && input.bodies ? pickQuote(def, input.bodies, cfg.quote_headings, today) : undefined;
       const stats: HabitStats = {
         kind: "habit", done, goal: def.goal ?? 20, prevMonth: prev, last14,
         record: bestStreak(daily, k, today), weekStreak: ws.streak, weekThis: ws.thisWeek, weekThreshold: thr,
+        comebacks: cbs.length, comebackRecent, quote,
       };
       return { def, stats };
     }
@@ -205,7 +456,7 @@ export function computeStats(input: BoardInput): BoardStats {
     return { def, stats };
   });
 
-  return { month, today, xp, level, into, perLevel, quests: out };
+  return { month, today, xp, level, into, perLevel, quests: out, now: computeNow(input) };
 }
 
 
@@ -217,6 +468,7 @@ export interface WeekHabit {
   days: (boolean | null)[];
   done: number;
   threshold: number;
+  comeback: boolean;
 }
 
 export interface WeekProject {
@@ -290,8 +542,9 @@ export function computeWeek(input: BoardInput, key?: string): WeekStats {
       const k = def.habit;
       const ds = days.map(d => (d > input.today ? null : habitDone(input.daily[d], k)));
       const done = ds.filter(Boolean).length;
-      xpWeek += done * xpH;
-      habits.push({ def, days: ds, done, threshold: def.weekly ?? 4 });
+      const cbs = comebackDays(input.daily, k, input.today, cfg.comeback_gap ?? 3).filter(inWeek);
+      xpWeek += done * xpH + cbs.length * (cfg.xp_per_comeback ?? 10);
+      habits.push({ def, days: ds, done, threshold: def.weekly ?? 4, comeback: cbs.length > 0 });
     } else if (def.project) {
       const pt = input.tasks.filter(t => !t.recurrence && t._projects.includes(def.project as string));
       const doneThisWeek = pt
@@ -445,6 +698,30 @@ function levelStrip(f: Frame, y: number, level: number, line: string, frac: numb
   return { parts: [`<rect x="${f.M}" y="${y}" width="${f.W - 2 * f.M}" height="${bottom - y}" rx="14" fill="${CARD}"/>`, ...parts], y: bottom };
 }
 
+function nowCard(f: Frame, n: NowItem, y: number): { parts: string[]; y: number } {
+  const { P, F, m, W, M } = f;
+  const x0 = M + P, iw = W - 2 * M - 2 * P;
+  const col = n.quest?.color ?? GOLD;
+  const c: string[] = [];
+  let cy = y + P + F.small;
+  const head = n.state === "now" ? `TEĎ · ${n.start}${n.end ? `–${n.end}` : ""}` : `DALŠÍ · ${n.start}`;
+  c.push(txt(x0, cy, head, F.small, col, ` font-weight="bold" letter-spacing="0.5"`));
+  for (const l of wrap(n.label, iw, F.title, m, true).slice(0, 2)) { cy += lh(F.title); c.push(txt(x0, cy, l, F.title, TXT, ` font-weight="bold"`)); }
+  for (const h of n.how.slice(0, 6)) {
+    for (const [i, l] of wrap(h, iw - 14, F.body, m).slice(0, 2).entries()) {
+      cy += lh(F.body);
+      if (i === 0) c.push(`<circle cx="${x0 + 4}" cy="${(cy - F.body * 0.35).toFixed(1)}" r="2.5" fill="${col}"/>`);
+      c.push(txt(x0 + 14, cy, l, F.body, SOFT));
+    }
+  }
+  const bottom = cy + P;
+  const hook = f.interactive ? ` class="qb-now"${n.quest ? ` data-quest="${esc(n.quest.id)}"` : ""}` : "";
+  return {
+    parts: [`<g${hook}>`, `<rect x="${M + 1}" y="${y + 1}" width="${W - 2 * M - 2}" height="${bottom - y - 2}" rx="14" fill="${CARD}" stroke="${col}" stroke-width="2"/>`, ...c, `</g>`],
+    y: bottom,
+  };
+}
+
 export function renderSvg(b: BoardStats, opts: SvgOptions = {}): string {
   const f = frame(opts);
   const { W, M, P, GAP, F, m } = f;
@@ -463,6 +740,7 @@ export function renderSvg(b: BoardStats, opts: SvgOptions = {}): string {
   const ls = levelStrip(f, y, b.level, `${b.xp} XP · ${b.perLevel - b.into} do dalšího levelu`, b.into / b.perLevel);
   body.push(...ls.parts);
   y = ls.y + GAP;
+  if (b.now) { const nc = nowCard(f, b.now, y); body.push(...nc.parts); y = nc.y + GAP; }
 
   for (const { def, stats } of b.quests) {
     const col = def.color ?? "#60a5fa";
@@ -474,11 +752,25 @@ export function renderSvg(b: BoardStats, opts: SvgOptions = {}): string {
 
     const badges: string[] = [];
     if (stats.done >= stats.goal) badges.push("boss poražen");
-    if (stats.kind === "habit") badges.push(`rekord ${stats.record} d`, `týdny v řadě ${stats.weekStreak}`, `tento týden ${stats.weekThis}/${stats.weekThreshold}`);
+    if (stats.kind === "habit") {
+      if (stats.comebackRecent) badges.push(`↺ návrat ${stats.comebackRecent === "today" ? "dnes" : "včera"}`);
+      badges.push(`rekord ${stats.record} d`, `týdny v řadě ${stats.weekStreak}`, `tento týden ${stats.weekThis}/${stats.weekThreshold}`);
+      if (stats.comebacks) badges.push(`návraty ${stats.comebacks}`);
+    }
     if (badges.length) { const pr = pills(f, badges, col, x0, cy, iw); c.push(...pr.parts); cy = pr.y + 10; }
 
     if (def.why) {
       for (const l of wrap(`Proč: ${def.why}`, iw, F.body, m)) { cy += lh(F.body); c.push(txt(x0, cy - 4, l, F.body, SOFT)); }
+      cy += 8;
+    }
+    if (stats.kind === "habit" && stats.quote) {
+      const q = stats.quote;
+      const lines = wrap(`„${q.text}“`, iw - 12, F.body, m).slice(0, 3);
+      const qTop = cy;
+      for (const l of lines) { cy += lh(F.body); c.push(txt(x0 + 12, cy - 4, l, F.body, SOFT, ` font-style="italic"`)); }
+      cy += lh(F.small);
+      c.push(txt(x0 + 12, cy - 4, `— ty, ${shortDate(q.date)}`, F.small, MUT));
+      c.push(`<rect x="${x0}" y="${qTop + 4}" width="3" height="${cy - qTop - 6}" rx="1.5" fill="${col}"/>`);
       cy += 8;
     }
 
@@ -549,7 +841,8 @@ export function renderWeekSvg(w: WeekStats, opts: SvgOptions = {}): string {
     const right = `${h.done} / ${h.threshold}`;
     const rw = m(right, F.body, true);
     const c: string[] = [];
-    const head = cardHead(f, h.def, x0, y + P, rw + 12, met ? "týdenní práh splněn" : h.def.anchor ? `kotva: ${h.def.anchor}` : undefined);
+    const sub = [met ? "týdenní práh splněn" : "", h.comeback ? "↺ návrat" : ""].filter(Boolean).join(" · ") || (h.def.anchor ? `kotva: ${h.def.anchor}` : undefined);
+    const head = cardHead(f, h.def, x0, y + P, rw + 12, sub);
     c.push(...head.parts);
     c.push(txt(x0 + iw - rw, y + P + f.R + F.body * 0.35, right, F.body, met ? col : TXT, ` font-weight="bold"`));
     let cy = head.y + 14;

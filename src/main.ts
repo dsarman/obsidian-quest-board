@@ -1,6 +1,6 @@
 import { App, Keymap, Plugin, PluginSettingTab, Setting, TFile, MarkdownPostProcessorContext, MarkdownRenderChild, Notice } from "obsidian";
 import {
-  computeStats, computeWeek, renderSvg, renderWeekSvg, normalizeProjects, weekKeyFromPath, estimateWidth,
+  computeStats, computeWeek, renderSvg, renderWeekSvg, normalizeProjects, weekKeyFromPath, estimateWidth, referencedNotes,
   type BoardInput, type QuestConfig, type QuestDef, type TaskData, type Frontmatter, type Measure,
 } from "./core";
 
@@ -17,6 +17,11 @@ const DEFAULTS: QBSettings = {
   tasksFolder: "TaskNotes/Tasks",
   archiveFolder: "TaskNotes/Archive",
 };
+
+function nowLocal(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 function todayLocal(): string {
   const d = new Date();
@@ -72,7 +77,7 @@ class BoardView extends MarkdownRenderChild {
     const el = this.containerEl;
     const width = Math.round(el.clientWidth) || 640;
     this.lastWidth = width;
-    this.plugin.paint(this, width);
+    void this.plugin.paint(this, width);
   }
 }
 
@@ -83,6 +88,7 @@ export default class QuestBoardPlugin extends Plugin {
   private dailyPaths: Record<string, string> = {};
   private measure: Measure = estimateWidth;
   private fontFamily = "sans-serif";
+  private textCache = new Map<string, { mtime: number; text: string }>();
 
   async onload() {
     this.settings = Object.assign({}, DEFAULTS, await this.loadData());
@@ -100,7 +106,7 @@ export default class QuestBoardPlugin extends Plugin {
       id: "quest-board-copy-svg",
       name: "Copy Quest Board SVG to clipboard",
       callback: async () => {
-        const svg = renderSvg(computeStats(this.input()), { interactive: false, width: 640 });
+        const svg = renderSvg(computeStats(await this.fullInput()), { interactive: false, width: 640, measure: this.measure });
         await navigator.clipboard.writeText(svg);
         new Notice("Quest Board SVG copied");
       },
@@ -114,6 +120,8 @@ export default class QuestBoardPlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on("changed", bump));
     this.registerEvent(this.app.vault.on("delete", bump));
     this.registerEvent(this.app.vault.on("rename", bump));
+    // the Now card follows the clock
+    this.registerInterval(window.setInterval(() => this.refreshAll(), 60_000));
   }
 
   onunload() {
@@ -124,6 +132,32 @@ export default class QuestBoardPlugin extends Plugin {
 
   private fm(file: TFile): Frontmatter {
     return (this.app.metadataCache.getFileCache(file)?.frontmatter ?? {}) as Frontmatter;
+  }
+
+  private async read(f: TFile): Promise<string> {
+    const c = this.textCache.get(f.path);
+    if (c && c.mtime === f.stat.mtime) return c.text;
+    const text = await this.app.vault.cachedRead(f);
+    this.textCache.set(f.path, { mtime: f.stat.mtime, text });
+    return text;
+  }
+
+  /** Full input incl. note bodies (plan, reflections, how_from notes). */
+  async fullInput(month?: string): Promise<BoardInput> {
+    const base = this.input(month);
+    const bodies: Record<string, string> = {};
+    const wantBodies = !!base.config.quote_headings?.length;
+    for (const [day, path] of Object.entries(this.dailyPaths)) {
+      if (!wantBodies && day !== base.today) continue;
+      const f = this.app.vault.getAbstractFileByPath(path);
+      if (f instanceof TFile) bodies[day] = await this.read(f);
+    }
+    const texts: Record<string, string> = {};
+    for (const n of referencedNotes(base.config)) {
+      const f = this.app.metadataCache.getFirstLinkpathDest(n, "") ?? this.app.vault.getAbstractFileByPath(n.endsWith(".md") ? n : `${n}.md`);
+      if (f instanceof TFile) texts[n] = await this.read(f);
+    }
+    return { ...base, bodies, texts, now: nowLocal() };
   }
 
   input(month?: string): BoardInput {
@@ -155,18 +189,21 @@ export default class QuestBoardPlugin extends Plugin {
     ctx.addChild(new BoardView(el, this, parseBlock(src), ctx.sourcePath));
   }
 
-  paint(view: BoardView, width: number) {
+  async paint(view: BoardView, width: number) {
     const el = view.containerEl;
     const { opts, sourcePath: src } = view;
     const svgOpts = { interactive: true, width, measure: this.measure, fontFamily: this.fontFamily };
     let svg: string;
     let quests: QuestDef[];
     if (opts.view === "week") {
-      const w = computeWeek(this.input(), opts.week ?? weekKeyFromPath(src));
+      const w = computeWeek(await this.fullInput(), opts.week ?? weekKeyFromPath(src));
       svg = renderWeekSvg(w, svgOpts);
       quests = [...w.habits.map(h => h.def), ...w.projects.map(p => p.def)];
     } else {
-      const stats = computeStats(this.input(opts.month));
+      const inp = await this.fullInput(opts.month);
+      // the Now card belongs to the live board only, not to a past month
+      if (opts.month && opts.month !== inp.today.slice(0, 7)) inp.now = undefined;
+      const stats = computeStats(inp);
       svg = renderSvg(stats, svgOpts);
       quests = stats.quests.map(q => q.def);
     }
@@ -184,12 +221,12 @@ export default class QuestBoardPlugin extends Plugin {
         if (path) this.app.workspace.openLinkText(path, src, Keymap.isModEvent(ev));
       });
     });
-    el.querySelectorAll<SVGElement>(".qb-card").forEach(g => {
+    el.querySelectorAll<SVGElement>(".qb-card, .qb-now").forEach(g => {
       g.style.cursor = "pointer";
       g.addEventListener("click", ev => {
         const q = quests.find(x => x.id === g.dataset.quest);
-        if (!q) return;
-        this.app.workspace.openLinkText(this.cardTarget(q), src, Keymap.isModEvent(ev));
+        const target = q ? this.cardTarget(q) : this.dailyPaths[todayLocal()];
+        if (target) this.app.workspace.openLinkText(target, src, Keymap.isModEvent(ev));
       });
     });
   }

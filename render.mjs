@@ -5,7 +5,8 @@
  * Never writes into the vault.
  *
  * Usage: node render.mjs --vault PATH [--view month|week] [--month YYYY-MM] [--week YYYY-Www]
- *                        [--width PX] [--out DIR]   (or QB_VAULT=PATH)
+ *                        [--width PX] [--out DIR] [--now HH:MM|auto]   (or QB_VAULT=PATH)
+ * The Now card is off unless --now is given.
  * Prints the PNG path on success.
  */
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
@@ -13,7 +14,7 @@ import { join, basename } from "node:path";
 import { createRequire } from "node:module";
 const yaml = createRequire(import.meta.url)("js-yaml");
 import { Resvg } from "@resvg/resvg-js";
-import { computeStats, computeWeek, renderSvg, renderWeekSvg, normalizeProjects } from "./dist/core.js";
+import { computeStats, computeWeek, renderSvg, renderWeekSvg, normalizeProjects, referencedNotes } from "./dist/core.js";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => {
   if (x.startsWith("--")) a.push([x.slice(2), arr[i + 1]]);
@@ -44,9 +45,14 @@ function todayPrague() {
 
 const config = fm(join(VAULT, "Config/Quests.md"));
 const daily = {};
+const bodies = {};
 for (const p of walk(join(VAULT, "Notes"))) {
   const b = basename(p, ".md");
-  if (/\/Daily\/\d{4}-\d{2}-\d{2}\.md$/.test(p)) daily[b] = fm(p);
+  if (/\/Daily\/\d{4}-\d{2}-\d{2}\.md$/.test(p)) { daily[b] = fm(p); bodies[b] = readFileSync(p, "utf8"); }
+}
+const texts = {};
+for (const n of referencedNotes(config)) {
+  try { texts[n] = readFileSync(join(VAULT, n.endsWith(".md") ? n : `${n}.md`), "utf8"); } catch { /* missing note: no instruction */ }
 }
 const tasks = [];
 for (const dir of ["TaskNotes/Tasks", "TaskNotes/Archive"]) {
@@ -57,7 +63,10 @@ for (const dir of ["TaskNotes/Tasks", "TaskNotes/Archive"]) {
 }
 const today = todayPrague();
 const width = Number(args.width ?? 640);
-const input = { config, daily, tasks, today, month: args.month };
+const nowArg = args.now === "auto"
+  ? new Intl.DateTimeFormat("en-GB", { timeZone: process.env.QB_TZ ?? "Europe/Prague", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date())
+  : args.now;
+const input = { config, daily, tasks, today, month: args.month, bodies, texts, now: nowArg };
 const svg = args.view === "week"
   ? renderWeekSvg(computeWeek(input, args.week), { width })
   : renderSvg(computeStats(input), { width });

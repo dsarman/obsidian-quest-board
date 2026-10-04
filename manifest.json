@@ -1,7 +1,7 @@
 {
   "id": "quest-board",
   "name": "Quest Board",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.5.0",
   "description": "Habitica-style quest board from daily-note habits and TaskNotes: XP that only goes up, monthly goals, records and weekly streaks.",
   "author": "David",

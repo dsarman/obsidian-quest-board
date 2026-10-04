@@ -4,6 +4,9 @@ Habitica-inspired quest board for Obsidian, computed from data you already have:
 
 - **XP and levels only go up.** No HP loss, no streak that resets to zero.
 - **Habit quests**: monthly goal, longest-ever run (record), weekly streak (weeks meeting a per-quest threshold).
+- **Comebacks**: doing a habit again after a pause (`comeback_gap` days) earns bonus XP and a "↺" badge — restarting is rewarded, not just not breaking.
+- **Now card**: the current or next timed item of today's plan (Day Planner format) or of a quest's `when` window, with a concrete instruction (`how`, or the latest "Next:" item from a log note via `how_from`).
+- **Your own words**: a sentence from your daily reflections that mentions the habit, rotating daily.
 - **Project quests ("bosses")**: done / total tasks linked to the project, with the next open task.
 
 One TypeScript core (`src/core.ts`) computes the stats and emits SVG. Two hosts use it:
@@ -37,6 +40,11 @@ Quests live in the frontmatter of a note (default `Config/Quests.md`, changeable
 xp_per_habit: 10
 xp_per_task: 20
 xp_per_level: 100
+xp_per_comeback: 10        # bonus for doing a habit again after a pause
+comeback_gap: 3            # days without it that make the next one a comeback
+plan_heading: Day planner  # heading of the timed plan in daily notes (Now card)
+quote_headings:            # reflection headings mined for quotes (omit = off)
+  - What went well
 quests:
   - id: breathing
     type: habit
@@ -49,6 +57,11 @@ quests:
     anchor: "after lunch"
     why: "Calm, focused afternoons."
     note: "Projects/Breathing"  # optional: opened on click
+    words: [breath]             # optional: matches plan lines / reflections
+    when: "12:30-14:00"         # optional: Now-card window if the plan has no timed line
+    days: [1, 2, 3, 4, 5]       # optional: weekdays for `when` (1 = Mon)
+    how: "4 s in, 6 s out · 5 min, then stop"
+    # how_from: { note: "Logs/Physio", label: "Next" }  # last "Next" list item + sub-items
   - id: house
     type: project
     project: House          # note name; tasks with projects: [[House]] count
@@ -66,7 +79,7 @@ Daily notes are found as `*/Daily/YYYY-MM-DD.md` under the configured root; a li
 
 ```
 npm install && npm run build          # -> main.js, dist/core.js
-node render.mjs --vault PATH [--view month|week] [--month YYYY-MM] [--week YYYY-Www] [--width PX] [--out DIR]
+node render.mjs --vault PATH [--view month|week] [--month YYYY-MM] [--week YYYY-Www] [--width PX] [--now HH:MM|auto] [--out DIR]
 ```
 
 Releases are built by GitHub Actions when a tag matching the manifest version (e.g. `0.1.0`) is pushed.
