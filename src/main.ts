@@ -1,5 +1,5 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile, MarkdownPostProcessorContext, Notice } from "obsidian";
-import { computeStats, renderSvg, normalizeProjects, type BoardInput, type QuestConfig, type TaskData, type Frontmatter } from "./core";
+import { App, Keymap, Plugin, PluginSettingTab, Setting, TFile, MarkdownPostProcessorContext, Notice } from "obsidian";
+import { computeStats, renderSvg, normalizeProjects, type BoardInput, type QuestConfig, type QuestDef, type TaskData, type Frontmatter } from "./core";
 
 interface QBSettings {
   configPath: string;
@@ -24,6 +24,7 @@ export default class QuestBoardPlugin extends Plugin {
   settings: QBSettings = DEFAULTS;
   private containers = new Set<HTMLElement>();
   private refreshTimer: number | null = null;
+  private dailyPaths: Record<string, string> = {};
 
   async onload() {
     this.settings = Object.assign({}, DEFAULTS, await this.loadData());
@@ -68,22 +69,26 @@ export default class QuestBoardPlugin extends Plugin {
 
     const daily: Record<string, Frontmatter> = {};
     const tasks: TaskData[] = [];
+    const dailyPaths: Record<string, string> = {};
     for (const f of this.app.vault.getMarkdownFiles()) {
       if (f.path.startsWith(s.dailyGlob) && /\/Daily\/\d{4}-\d{2}-\d{2}\.md$/.test(f.path)) {
         daily[f.basename] = this.fm(f);
+        dailyPaths[f.basename] = f.path;
       } else if (f.path.startsWith(s.tasksFolder + "/") || f.path.startsWith(s.archiveFolder + "/")) {
         const fm = this.fm(f);
         if (Object.keys(fm).length === 0) continue;
         tasks.push({ ...fm, _projects: normalizeProjects(fm.projects), _path: f.path });
       }
     }
+    this.dailyPaths = dailyPaths;
     const input: BoardInput = { config, daily, tasks, today: todayLocal(), month };
     return computeStats(input);
   }
 
   // ---------- rendering ----------
 
-  private renderBlock(src: string, el: HTMLElement, _ctx: MarkdownPostProcessorContext) {
+  private renderBlock(src: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) {
+    el.dataset.qbSource = ctx.sourcePath;
     const month = src.match(/month:\s*(\d{4}-\d{2})/)?.[1];
     el.dataset.qbMonth = month ?? "";
     this.containers.add(el);
@@ -92,6 +97,7 @@ export default class QuestBoardPlugin extends Plugin {
 
   private paint(el: HTMLElement) {
     const month = el.dataset.qbMonth || undefined;
+    const src = el.dataset.qbSource ?? "";
     const stats = this.collect(month);
     el.empty();
     el.addClass("quest-board");
@@ -99,25 +105,30 @@ export default class QuestBoardPlugin extends Plugin {
     // make the SVG responsive
     const svg = el.querySelector("svg");
     if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("style", "width:100%;height:auto"); }
-    // clickable: card -> open project/config note; "další" -> open task
+    // clickable: card -> its note (see cardTarget); "další" -> open task
     el.querySelectorAll<SVGElement>(".qb-link").forEach(n => {
       n.style.cursor = "pointer";
       n.addEventListener("click", ev => {
         ev.stopPropagation();
         const path = n.dataset.path;
-        if (path) this.app.workspace.openLinkText(path, "", false);
+        if (path) this.app.workspace.openLinkText(path, src, Keymap.isModEvent(ev));
       });
     });
     el.querySelectorAll<SVGElement>(".qb-card").forEach(g => {
       g.style.cursor = "pointer";
-      g.addEventListener("click", () => {
-        const id = g.dataset.quest;
-        const q = (stats.quests.find(x => x.def.id === id)?.def);
+      g.addEventListener("click", ev => {
+        const q = stats.quests.find(x => x.def.id === g.dataset.quest)?.def;
         if (!q) return;
-        const target = q.type === "project" && q.project ? q.project : this.settings.configPath;
-        this.app.workspace.openLinkText(target, "", false);
+        this.app.workspace.openLinkText(this.cardTarget(q), src, Keymap.isModEvent(ev));
       });
     });
+  }
+
+  /** Where a card click leads: explicit `note`, else the project note, else today's daily note (habits), else the config. */
+  private cardTarget(q: QuestDef): string {
+    if (q.note) return q.note;
+    if (q.type === "project" && q.project) return q.project;
+    return this.dailyPaths[todayLocal()] ?? this.settings.configPath;
   }
 
   private refreshAll() {

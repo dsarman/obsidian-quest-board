@@ -18,6 +18,8 @@ export interface QuestDef {
   weekly?: number;
   anchor?: string;
   why?: string;
+  /** Note opened when the card is clicked (link text or vault path). Defaults: project note for projects, today's daily note for habits. */
+  note?: string;
 }
 
 export interface QuestConfig {

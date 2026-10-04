@@ -36,6 +36,7 @@ quests:
     weekly: 4               # days per ISO week that count toward the weekly streak
     anchor: "after lunch"
     why: "Calm, focused afternoons."
+    note: "Projects/Breathing"  # optional: opened on click
   - id: house
     type: project
     project: House          # note name; tasks with projects: [[House]] count
@@ -44,6 +45,8 @@ quests:
     color: "#FFB74D"
     why: "Finish the renovation."
 ```
+
+Clicking a card opens its `note` (link text or path, any file type); without it, project cards open the project note and habit cards open today's daily note. The "next:" line on a project card opens that task. Ctrl/Cmd-click opens in a new tab.
 
 Daily notes are found as `*/Daily/YYYY-MM-DD.md` under the configured root; a list property counts as done when non-empty. Recurring TaskNotes count `completeInstances`.
 

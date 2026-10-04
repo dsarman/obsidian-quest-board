@@ -1,6 +1,6 @@
 {
   "name": "obsidian-quest-board",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Habitica-style quest board rendered from daily-note habits and TaskNotes. One SVG core for Obsidian and for server-side PNG export.",
   "type": "module",
   "scripts": {
